@@ -14,9 +14,10 @@ type value struct {
 type messagetype string
 
 const (
-	propose messagetype = "propose"
-	promise messagetype = "promise"
-	commit  messagetype = "commit"
+	propose  messagetype = "propose"
+	promise  messagetype = "promise"
+	accept   messagetype = "accept"
+	desicion messagetype = "desicion"
 )
 
 const (
@@ -38,6 +39,8 @@ type node struct {
 
 	proposer bool
 	votes    int
+
+	desicionVotes int
 
 	promisedval  int
 	promisednode int
@@ -77,17 +80,19 @@ func (n *node) executeOnValueReceived(rec value) {
 			n.votes = 0
 			n.proposer = false
 			n.promisednodes = []int{}
+			n.desicionVotes = 1
 			//fmt.Println("Node:", n.name, " Received message from Node:", rec.nodenum, " value:", rec.val)
 			//n.out[rec.nodenum] <- value{nodenum: n.name, val: rec.val, mestype: promise}
-		} else if rec.val == n.promisedval {
+		} else if rec.val < n.promisedval {
 			//n.votes = n.votes + 1
+			fmt.Println("The Proposed value:", rec.val, " declined")
 		}
 
 		if n.name < rec.nodenum {
-			fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, " need to send promise on channel: ", (4*rec.nodenum)+(n.name))
+			//fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, " need to send promise on channel: ", (4*rec.nodenum)+(n.name))
 			n.out[(4*rec.nodenum)+(n.name)] <- value{nodenum: n.name, val: rec.val, mestype: promise}
 		} else {
-			fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, ", need to send promise on channel: ", (4*rec.nodenum)+(n.name-1))
+			//fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, ", need to send promise on channel: ", (4*rec.nodenum)+(n.name-1))
 			n.out[(4*rec.nodenum)+(n.name-1)] <- value{nodenum: n.name, val: rec.val, mestype: promise}
 		}
 
@@ -105,106 +110,58 @@ func (n *node) executeOnValueReceived(rec value) {
 			for _, nodenum := range n.promisednodes {
 				fmt.Println("Promise Node:", n.name, ", Received from: ", nodenum)
 				if n.name < nodenum {
-					fmt.Println("Promise: Received Promise from Node:", nodenum, ", need to send commit on channel: ", (4*nodenum)+(n.name))
-					n.out[(4*nodenum)+(n.name)] <- value{nodenum: n.name, val: rec.val, mestype: commit}
+					//fmt.Println("Promise: Received Promise from Node:", nodenum, ", need to send commit on channel: ", (4*nodenum)+(n.name))
+					n.out[(4*nodenum)+(n.name)] <- value{nodenum: n.name, val: rec.val, mestype: accept}
 				} else {
-					fmt.Println("Promise: Received message from Node:", rec.nodenum, ", need to send commit on channel: ", (4*nodenum)+(n.name-1))
-					n.out[(4*nodenum)+(n.name-1)] <- value{nodenum: n.name, val: rec.val, mestype: commit}
+					//fmt.Println("Promise: Received message from Node:", rec.nodenum, ", need to send commit on channel: ", (4*nodenum)+(n.name-1))
+					n.out[(4*nodenum)+(n.name-1)] <- value{nodenum: n.name, val: rec.val, mestype: accept}
 				}
 			}
 			n.promisednodes = []int{}
 		}
-		//fmt.Println("Promise Node:", n.name, ", Received from: ", rec.nodenum)
-		// if n.name < rec.nodenum {
-		// 	fmt.Println("Promise: Received Promise from Node:", rec.nodenum, ", need to send commit on channel: ", (4*rec.nodenum)+(n.name))
-		// 	//n.out[(4*rec.nodenum)+(n.name)] <- value{nodenum: n.name, val: rec.val, mestype: commit}
-		// } else {
-		// 	fmt.Println("Promise: Received message from Node:", rec.nodenum, ", need to send commit on channel: ", (4*rec.nodenum)+(n.name-1))
-		// 	//n.out[(4*rec.nodenum)+(n.name-1)] <- value{nodenum: n.name, val: rec.val, mestype: commit}
-		// }
 
-		// if n.votes > numofnodes/2 {
-		// 	for i := 0; i < numofnodes; i++ {
-		// 		if n.name == i {
-		// 			continue
-		// 		}
-		// 		if n.name < i {
-		// 			fmt.Println("Promise: Sending Commit from Node:", n.name, ",  on channel: ", (4*i)+(n.name))
-		// 			n.out[(4*i)+(n.name-1)] <- value{nodenum: n.name, val: rec.val, mestype: commit}
-		// 		} else {
-		// 			fmt.Println("Promise: Sending Commit from Node:", n.name, ",  on channel: ", (4*i)+(n.name-1))
-		// 			n.out[(4*i)+(n.name)] <- value{nodenum: n.name, val: rec.val, mestype: commit}
-		// 		}
-		// 	}
-		// 	fmt.Println("Value: ", rec.val, " , wins most votes")
-
-		// }
-
-	case commit:
+	case accept:
 		commitmutex.Lock()
 		defer commitmutex.Unlock()
 
-		// fmt.Println("committed")
-
 		if n.promisedval == rec.val && n.promisednode == rec.nodenum {
 			// 	n.promisedval = rec.val
-			fmt.Println("Node: ", n.name, " ,committed:", rec.val)
+			//fmt.Println("Node: ", n.name, " ,committed:", rec.val)
+			if n.name == 1 || n.name == 2 || n.name == 3 {
+				break
+			}
+			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion})
 		}
 		//fmt.Println("Commit Node:", n.name, ", Received from: ", rec.nodenum, " , Value: ", rec.val)
-
+	case desicion:
+		if n.promisedval == rec.val {
+			n.desicionVotes = n.desicionVotes + 1
+			if n.desicionVotes > numofnodes/2 {
+				fmt.Println("Node:", n.name, ", consensus reached for Value: ", rec.val)
+				break
+			}
+			fmt.Println("Node:", n.name, ", no consensus reached for Value: ", rec.val)
+		}
 	}
-}
-
-func (n *node) commit(comVal int) {
-	// i := numofnodes * n.name
-	// fmt.Println("Committing:", i+1)
-	// fmt.Println("Committing:", i+2)
-	// fmt.Println("Committing:", i+3)
-	// fmt.Println("Committing:", i+4)
-	// n.out[i+1] <- value{
-	// 	nodenum: n.name,
-	// 	val:     comVal,
-	// 	mestype: commit,
-	// }
-	// n.out[i+2] <- value{
-	// 	nodenum: n.name,
-	// 	val:     comVal,
-	// 	mestype: commit,
-	// }
-	// n.out[i+3] <- value{
-	// 	nodenum: n.name,
-	// 	val:     comVal,
-	// 	mestype: commit,
-	// }
-	// n.out[i+4] <- value{
-	// 	nodenum: n.name,
-	// 	val:     comVal,
-	// 	mestype: commit,
-	// }
-
 }
 
 func (n *node) Propose(propVal int) {
 	n.proposer = true
 	n.votes = 0
 	n.promisedval = propVal
+	n.broadcast(value{nodenum: n.name, val: propVal, mestype: propose})
+}
+
+func (n *node) broadcast(val value) {
 	for i := 0; i < numofnodes; i++ {
 		if i == n.name {
 			continue
 		}
 		if i < n.name {
-			n.out[(4*i)+(n.name-1)] <- value{
-				nodenum: n.name,
-				val:     propVal,
-				mestype: propose,
-			}
+			n.out[(4*i)+(n.name-1)] <- val
 			fmt.Println(n.name, " - ", (4*i)+(n.name-1))
 		} else {
-			n.out[(4*i)+n.name] <- value{
-				nodenum: n.name,
-				val:     propVal,
-				mestype: propose,
-			}
+			n.out[(4*i)+n.name] <- val
 			fmt.Println(n.name, " - ", (4*i)+n.name)
 		}
 	}
@@ -220,10 +177,11 @@ func main() {
 	fmt.Println("started...")
 	nodes := initialize()
 	fmt.Println("num of channels:", numofchannels)
-	go nodes[3].Propose(13)
+
 	go nodes[0].Propose(10)
 	go nodes[1].Propose(11)
 	go nodes[2].Propose(12)
+	go nodes[3].Propose(13)
 
 	//fmt.Println(nodes)
 	time.Sleep(duration * 5)
@@ -232,6 +190,23 @@ func main() {
 	fmt.Printf("%d, %d \n", nodes[2].name, nodes[2].votes)
 	fmt.Printf("%d ,%d \n", nodes[3].name, nodes[3].votes)
 	fmt.Printf("%d ,%d \n", nodes[4].name, nodes[4].votes)
+	time.Sleep(duration * 5)
+	go nodes[3].Propose(14)
+	time.Sleep(duration * 5)
+	fmt.Printf("%d, %d \n", nodes[0].name, nodes[0].votes)
+	fmt.Printf("%d, %d \n", nodes[1].name, nodes[1].votes)
+	fmt.Printf("%d, %d \n", nodes[2].name, nodes[2].votes)
+	fmt.Printf("%d ,%d \n", nodes[3].name, nodes[3].votes)
+	fmt.Printf("%d ,%d \n", nodes[4].name, nodes[4].votes)
+	time.Sleep(duration * 5)
+	go nodes[3].Propose(13)
+	time.Sleep(duration * 5)
+	fmt.Printf("%d, %d \n", nodes[0].name, nodes[0].votes)
+	fmt.Printf("%d, %d \n", nodes[1].name, nodes[1].votes)
+	fmt.Printf("%d, %d \n", nodes[2].name, nodes[2].votes)
+	fmt.Printf("%d ,%d \n", nodes[3].name, nodes[3].votes)
+	fmt.Printf("%d ,%d \n", nodes[4].name, nodes[4].votes)
+	time.Sleep(duration * 5)
 	time.Sleep(duration * 1000)
 
 }
