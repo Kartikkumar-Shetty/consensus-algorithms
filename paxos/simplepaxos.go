@@ -190,9 +190,9 @@ func (n *node) sendtospeficnodes(val value, targetnode int) {
 }
 
 func (n *node) validateState(mestype messagetype) bool {
-	if n.name == 1 || n.name == 2 {
-		return false
-	}
+	// if n.name == 1 || n.name == 2 {
+	// 	return false
+	// }
 	// if (n.state == propose && mestype == accept) || (n.state == promise && mestype == accept) {
 	// 	return true
 	// } else if n.state == accept && mestype == desicion {
