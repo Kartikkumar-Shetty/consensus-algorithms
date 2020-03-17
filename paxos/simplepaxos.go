@@ -7,10 +7,10 @@ import (
 )
 
 type value struct {
-	nodenum         int
-	val             int
-	mestype         messagetype
-	alreadycommited bool
+	nodenum   int
+	val       int
+	mestype   messagetype
+	committed bool
 }
 type messagetype string
 
@@ -31,8 +31,6 @@ var (
 	promisemutex  sync.Mutex
 	commitmutex   sync.Mutex
 	desicionmutex sync.Mutex
-
-	setpromisedvaluemutex sync.Mutex
 )
 
 type node struct {
@@ -44,17 +42,18 @@ type node struct {
 	promisedvotes int
 
 	desicionVotes int
-	desicionnodes []int
 
-	promisedval  int
-	promisednode int
+	promisedval int
 
-	promisednodes   []int
-	temppromiseflag bool //This is required so once promise is done after voting in case some node replies with delay then it should not send another accept
+	promisednodes []int //This is required to keep track of which nodes have promised so that we can send accept to them only after they send promise, otherwise wince the accep value does not match the promised value the node will ignore and the consensus cant be reached if other nodes are down and this nodes also does not send a decicion
 
-	tempconsensusflag bool //This is required so that once the consensus is done, dupllicate consensus message is not printed
+	isPromiseVoteWon bool //This is required so once promise is done after voting in case some node replies with delay then it should not send another accept
 
-	committedVal int
+	isConsensusVoteWon bool //This is required so that once the consensus is done, dupllicate consensus message is not printed
+
+	state messagetype
+
+	committedValue int
 }
 
 func (n *node) Read() {
@@ -78,139 +77,129 @@ func (n *node) Read() {
 
 func (n *node) setdefaults() {
 	n.promisedvotes = 0
-	n.promisednodes = []int{}
 	n.desicionVotes = 1 //One vote is of the proposer
-	n.tempconsensusflag = false
-	n.temppromiseflag = false
-}
-
-func (n *node) setPromisedValue(v int) {
-	setpromisedvaluemutex.Lock()
-	defer setpromisedvaluemutex.Unlock()
-	n.promisedval = v
+	n.isConsensusVoteWon = false
+	n.isPromiseVoteWon = false
+	n.promisednodes = []int{}
 }
 
 func (n *node) executeOnValueReceived(rec value) {
 	//fmt.Println("Triggered")
+	proposemutex.Lock()
+	defer proposemutex.Unlock()
 
 	switch rec.mestype {
-	case propose:
-		proposemutex.Lock()
-		defer proposemutex.Unlock()
-		if n.committedVal != 0 {
-			fmt.Println("Node:", n.name, " Already committed value: ", n.committedVal)
-			if n.name < rec.nodenum {
-				//fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, " need to send promise on channel: ", (4*rec.nodenum)+(n.name))
-				n.out[(4*rec.nodenum)+(n.name)] <- value{nodenum: n.name, val: n.committedVal, mestype: promise, alreadycommited: true}
-			} else {
-				//fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, ", need to send promise on channel: ", (4*rec.nodenum)+(n.name-1))
-				n.out[(4*rec.nodenum)+(n.name-1)] <- value{nodenum: n.name, val: n.committedVal, mestype: promise, alreadycommited: true}
-			}
-			n.promisedvotes = 0
-			n.temppromiseflag = false
-			n.desicionVotes = 0
-			n.tempconsensusflag = false
+	case propose: //this message will only be recieved by the proposer so the proposer flag is not required
+		if n.committedValue != 0 {
+			rec.val = n.committedValue
+			rec.committed = true
+		} else if rec.val > n.promisedval {
+			n.promisedval = rec.val
+			n.state = propose
+			n.setdefaults()
+		} else if rec.val < n.promisedval {
+			//fmt.Println("The Proposed value:", rec.val, " declined")
+			break
+		}
+		//fmt.Println(rec.mestype, ": Node:", n.name, " received from ", rec.nodenum, " value:", rec.val)
+
+		if n.name < rec.nodenum {
+			//fmt.Println("Sending ", promise, ": Node:", n.name, " to ", rec.nodenum, " value:", rec.val, " on ", (4*rec.nodenum)+(n.name))
+			n.out[(4*rec.nodenum)+(n.name)] <- value{nodenum: n.name, val: rec.val, mestype: promise}
+		} else {
+			//fmt.Println("Sending ", promise, ": Node:", n.name, " to ", rec.nodenum, " value:", rec.val, " on ", (4*rec.nodenum)+(n.name-1))
+			n.out[(4*rec.nodenum)+(n.name-1)] <- value{nodenum: n.name, val: rec.val, mestype: promise}
+		}
+	case promise:
+		if rec.committed {
+			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: accept})
+			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion})
 			break
 		}
 
 		if rec.val > n.promisedval {
-			//n.promisedval = rec.val
-			n.setPromisedValue(rec.val)
-			n.promisednode = rec.nodenum
 			n.setdefaults()
+			n.promisedval = rec.val
+			n.state = promise
 		} else if rec.val < n.promisedval {
-			fmt.Println("The Proposed value:", rec.val, " declined")
-
-		}
-
-		if n.name < rec.nodenum {
-			//fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, " need to send promise on channel: ", (4*rec.nodenum)+(n.name))
-			n.out[(4*rec.nodenum)+(n.name)] <- value{nodenum: n.name, val: rec.val, mestype: promise}
-		} else {
-			//fmt.Println("Propose: Received message from Node:", rec.nodenum, ", to: ", n.name, ", need to send promise on channel: ", (4*rec.nodenum)+(n.name-1))
-			n.out[(4*rec.nodenum)+(n.name-1)] <- value{nodenum: n.name, val: rec.val, mestype: promise}
-		}
-
-	case promise: //this message will only be recieved by the proposer so the proposer flag is not required
-		promisemutex.Lock()
-		defer promisemutex.Unlock()
-		//fmt.Println("Promised value: ", n.promisedval, " , received value:", rec.val, " , votes:", n.votes)
-		if rec.alreadycommited {
-			n.setPromisedValue(rec.val)
-			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: accept})
-			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion})
-			n.promisedvotes = 0
-			n.temppromiseflag = false
-			n.desicionVotes = 0
-			n.tempconsensusflag = false
 			break
-		} else {
+		}
 
-			if rec.val > n.promisedval {
-				// make both the flags false in case a new higher value has arrived, sp that a new promise and desicion can be made and all votes can be reset to 0
-				//n.promisedval = rec.val
-				n.setPromisedValue(rec.val)
-				n.setdefaults()
+		n.promisednodes = append(n.promisednodes, rec.nodenum)
+		n.promisedvotes = n.promisedvotes + 1
 
-			}
+		//fmt.Println(promise, ": Node:", n.name, " from ", rec.nodenum, " value:", rec.val, "WINS ", n.promisedvotes, " VOTES")
 
-			if rec.val == n.promisedval {
-				n.promisedvotes = n.promisedvotes + 1
-				n.promisednodes = append(n.promisednodes, rec.nodenum)
-			} else {
-				//This will reduce the unncecssary logs and bugs
-				break
-			}
+		if n.isPromiseVoteWon {
+			n.sendtospeficnodes(value{val: rec.val, nodenum: n.name, mestype: accept}, rec.nodenum)
+			break
+		}
 
-			fmt.Println("Node: ", n.name, " PROMISE from: ", rec.nodenum, " , received value:", rec.val, n.promisedval, n.temppromiseflag, n.promisedvotes)
-			if n.temppromiseflag {
-				return
+		//fmt.Println(promise, ": Node:", n.name, " from ", rec.nodenum, " value:", rec.val, "WINS ", n.promisedvotes, " Winning VOTES")
+
+		n.state = promise
+		if n.promisedvotes > numofnodes/2 {
+			n.isPromiseVoteWon = true
+			for _, pn := range n.promisednodes {
+				n.sendtospeficnodes(value{val: rec.val, nodenum: n.name, mestype: accept}, pn)
 			}
-			if n.promisedvotes > numofnodes/2 {
-				n.broadcast(value{val: rec.val, nodenum: n.name, mestype: accept})
-				n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion})
-				n.promisednodes = []int{}
-				n.temppromiseflag = true
-			}
+			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion})
 		}
 
 	case accept:
-		commitmutex.Lock()
-		defer commitmutex.Unlock()
-		if rec.alreadycommited {
-			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion, alreadycommited: true})
+		if !n.validateState(rec.mestype) {
+			break
+		} else if n.promisedval != rec.val {
 			break
 		}
-		if n.name == 1 || n.name == 2 {
-			break
-		}
-		if n.promisedval == rec.val {
-			fmt.Println("Node: ", n.name, " Received Accept:", rec.val)
-			n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion})
-		}
+
+		fmt.Println("Sending ", desicion, ": Node:", n.name, " from ", rec.nodenum, " value:", rec.val)
+		n.state = accept
+		n.broadcast(value{val: rec.val, nodenum: n.name, mestype: desicion})
 
 	case desicion:
-		desicionmutex.Lock()
-		defer desicionmutex.Unlock()
-		if n.promisedval == rec.val {
-			fmt.Println("Node:", n.name, " Received desicion for Value: ", rec.val, ", from: ", rec.nodenum)
-			if n.tempconsensusflag {
-				return
-			}
-			n.desicionVotes = n.desicionVotes + 1
-			n.desicionnodes = append(n.desicionnodes, rec.nodenum)
-			if n.desicionVotes > numofnodes/2 {
-				fmt.Println("Node:", n.name, " CONSENSUS REACHED for Value: ", rec.val, ", nodes: ", n.desicionnodes)
-				n.desicionnodes = []int{}
-				n.desicionVotes = 0
-				n.tempconsensusflag = true
-				n.committedVal = rec.val
-
-				break
-			}
-			//fmt.Println("Node:", n.name, ", received message from:", rec.nodenum, " no consensus reached for Value: ", rec.val)
+		if !n.validateState(rec.mestype) {
+			//fmt.Println("Rejected:", desicion, " Node:", n.name, " from ", rec.nodenum, " value:", rec.val, " sent state:", rec.mestype, " my state:", n.state)
+			break
+		} else if n.promisedval != rec.val {
+			break
 		}
+
+		n.desicionVotes = n.desicionVotes + 1
+
+		if n.isConsensusVoteWon {
+			break
+		}
+		//fmt.Println(desicion, " Node:", n.name, " from ", rec.nodenum, " value:", rec.val, " votes:", n.desicionVotes)
+		if n.desicionVotes > numofnodes/2 {
+			n.committedValue = rec.val
+			n.isConsensusVoteWon = true
+			n.committedValue = rec.val
+			fmt.Println(desicion, " CONSENSUS Node:", n.name, " from ", rec.nodenum, " value:", rec.val)
+		}
+
 	}
+}
+func (n *node) sendtospeficnodes(val value, targetnode int) {
+	//fmt.Println("Sending ", val.mestype, "from ", n.name, "to Node:", targetnode, " for value:", val.val)
+	if n.name < targetnode {
+		n.out[(4*targetnode)+(n.name)] <- val
+	} else {
+		n.out[(4*targetnode)+(n.name-1)] <- val
+	}
+}
+
+func (n *node) validateState(mestype messagetype) bool {
+	if n.name == 1 || n.name == 2 {
+		return false
+	}
+	// if (n.state == propose && mestype == accept) || (n.state == promise && mestype == accept) {
+	// 	return true
+	// } else if n.state == accept && mestype == desicion {
+	// 	return true
+	// }
+	// return false
+	return true
 }
 
 func (n *node) Propose(propVal int) {
@@ -222,12 +211,13 @@ func (n *node) broadcast(val value) {
 		if i == n.name {
 			continue
 		}
+		//fmt.Println(val.mestype, ": Node:", n.name, " for ", i)
 		if i < n.name {
 			n.out[(4*i)+(n.name-1)] <- val
-			fmt.Println("Node:", n.name, " sent:", val.val, " for ", val.mestype, " to ", i)
+			//fmt.Println(val.mestype, ": Node:", n.name, " for ", i, " on ", (4*i)+(n.name-1), " sent:", val.val)
 		} else {
 			n.out[(4*i)+n.name] <- val
-			fmt.Println("Node:", n.name, " sent:", val.val, " for ", val.mestype, " to ", i)
+			//fmt.Println(val.mestype, ": Node:", n.name, " for ", i, " on ", (4*i)+n.name, " sent:", val.val)
 		}
 	}
 }
@@ -247,9 +237,10 @@ func main() {
 	go nodes[1].Propose(11)
 	go nodes[2].Propose(12)
 	go nodes[3].Propose(13)
+	go nodes[4].Propose(14)
 
 	//fmt.Println(nodes)
-	time.Sleep(duration * 5)
+	time.Sleep(duration * 15)
 	fmt.Printf("%d, %d \n", nodes[0].name, nodes[0].promisedvotes)
 	fmt.Printf("%d, %d \n", nodes[1].name, nodes[1].promisedvotes)
 	fmt.Printf("%d, %d \n", nodes[2].name, nodes[2].promisedvotes)
