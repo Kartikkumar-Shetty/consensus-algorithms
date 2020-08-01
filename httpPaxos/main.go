@@ -150,9 +150,10 @@ func createHandlers() {
 }
 
 func propose(trxid int) int {
-	if getState() == accepted {
+	if getState() == accepted || getState() == finalized {
 		return 0
 	}
+
 	if !(compareAndSetTransaction(trxid)) {
 		fmt.Println("Cannot propose, already have a higher Leader Candidate")
 		return 0
@@ -278,9 +279,9 @@ func sendaccept(trxid int) {
 		go func(msg message, to string) {
 			defer wg.Done()
 			fmt.Println("Sending acceptance messages: ", to)
-			_, status := postData(msg, to, "accept")
+			resp, status := postData(msg, to, "accept")
 			if status == 200 {
-				fmt.Printf("received yes vote for accept , transaction: %d, from: %s \n", msg.Transactionid, msg.From)
+				fmt.Printf("received yes vote for accept , transaction: %d, from: %s \n", msg.Transactionid, resp.From)
 				promiseHist.acceptVotes = promiseHist.acceptVotes + 1
 			} else {
 				fmt.Println("Did not get yes vote, status", status)
@@ -371,6 +372,7 @@ func handleAcceptance(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		//}
+		fmt.Printf("Responding to Accept with OK, %v \n", respMessage)
 		w.WriteHeader(200)
 		writehttpOutput(respMessage, w)
 		return
@@ -436,7 +438,7 @@ func handleAcceptance(w http.ResponseWriter, r *http.Request) {
 }
 
 func saveTheLeader(from string) {
-	fmt.Println("Leader Elected its:", from)
+	fmt.Println("***LEADER ELECTED ITS:", from, "***")
 	st.KnowsALeader = true
 	st.State = finalized
 	st.Leader = from
@@ -444,7 +446,7 @@ func saveTheLeader(from string) {
 }
 
 func IAmTheLeader() {
-	fmt.Println("I am the Leader")
+	fmt.Println("***I AM THE LEADER***")
 	st.KnowsALeader = true
 	st.IsALeader = true
 	st.State = finalized
