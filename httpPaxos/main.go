@@ -21,6 +21,7 @@ var mutx sync.Mutex
 
 var electmutx sync.Mutex
 var trxmutx sync.Mutex
+var quorumVotes int
 
 const (
 	//proposed  electionstate = "proposed"
@@ -89,6 +90,8 @@ func main() {
 		}
 		membernodes = append(membernodes, nodes[i])
 	}
+	quorumVotes = len(nodes) / 2
+	fmt.Println(quorumVotes)
 	fmt.Println("Peers:", membernodes)
 
 	resetVariables()
@@ -147,6 +150,9 @@ func createHandlers() {
 }
 
 func propose(trxid int) int {
+	if getState() == accepted {
+		return 0
+	}
 	if !(compareAndSetTransaction(trxid)) {
 		fmt.Println("Cannot propose, already have a higher Leader Candidate")
 		return 0
@@ -180,14 +186,13 @@ func propose(trxid int) int {
 				fmt.Printf("received no vote for proposal, response %+v \n", resp)
 			}
 		}(msg, v)
-
 	}
 	wg.Wait()
 
 	mutx.Lock()
 	defer mutx.Unlock()
 	if trxid == getTransaction() {
-		if promiseHist.votes > len(membernodes)/2 {
+		if promiseHist.votes >= quorumVotes {
 			if !(compareAndSet("", accepted) || compareAndSet(promised, accepted)) {
 				fmt.Println("received max promise votes but state is,", getState())
 				return 0
@@ -241,10 +246,10 @@ func handleProposal(w http.ResponseWriter, r *http.Request) {
 
 	if st.State == accepted || st.State == finalized {
 		//ignore everything unless leader is lost
-		fmt.Println("Rejected Proposal, since status already changed to Accepted or fianlized", msg.Transactionid)
+		fmt.Println("Rejected Proposal, since status already changed to Accepted or finalized", msg.Transactionid)
 		respMessage := message{
 			Transactionid: msg.Transactionid,
-			Messagetype:   "",
+			Messagetype:   promise,
 			From:          portnumber,
 			Leader:        msg.Leader,
 		}
@@ -275,7 +280,7 @@ func sendaccept(trxid int) {
 			fmt.Println("Sending acceptance messages: ", to)
 			_, status := postData(msg, to, "accept")
 			if status == 200 {
-				fmt.Printf("received yes vote for accept , transaction: %d \n", msg.Transactionid)
+				fmt.Printf("received yes vote for accept , transaction: %d, from: %s \n", msg.Transactionid, msg.From)
 				promiseHist.acceptVotes = promiseHist.acceptVotes + 1
 			} else {
 				fmt.Println("Did not get yes vote, status", status)
@@ -288,7 +293,7 @@ func sendaccept(trxid int) {
 	defer mutx.Unlock()
 
 	if getTransaction() == msg.Transactionid {
-		if len(membernodes)/2 < promiseHist.acceptVotes {
+		if promiseHist.acceptVotes >= quorumVotes {
 			if compareAndSet(accepted, finalized) {
 				IAmTheLeader()
 			}
@@ -310,21 +315,16 @@ func handleAcceptance(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 	currentState := getState()
+
 	if currentState == finalized {
 		fmt.Printf("Finalized rejecting accept: %+v \n", msg)
 		w.WriteHeader(406)
 		return
-	} else if currentState == accepted {
-		fmt.Printf("Already Accepted rejecting accept: %+v \n", msg)
-		w.WriteHeader(406)
-
-	} else if compareAndSet(promised, accepted) && getTransaction() == msg.Transactionid {
+	} else if msg.Messagetype == accept && getTransaction() == msg.Transactionid && compareAndSet(promised, accepted) {
 
 		fmt.Printf("Accepted Accept: %+v \n", msg)
 		//change state to promised with accepted transaction
 		//if msg.Transactionid == st.LeaderCandidateTransaction {
-
-		st.State = accepted
 
 		respMessage := message{
 			Transactionid: msg.Transactionid,
@@ -347,30 +347,58 @@ func handleAcceptance(w http.ResponseWriter, r *http.Request) {
 		//fmt.Println("Votes for :", msg.Transactionid, ": ", len(acceptedNotifications[msg.Transactionid]))
 
 		//if msg.Messagetype == accept {
-		//if len(acceptedNotifications[msg.Transactionid]) > len(membernodes)/2 {
-		//Leader is elected
-		//st.LeaderCandidateTransaction = msg.Transactionid
-		//if msg.Leader != "" {
-		//saveTheLeader(msg.Leader)
-		//} else {
-		saveTheLeader(msg.From)
-		//}
+		if len(acceptedNotifications[msg.Transactionid]) >= quorumVotes && msg.Transactionid == getTransaction() {
+			//Leader is elected
+			//st.LeaderCandidateTransaction = msg.Transactionid
+			//if msg.Leader != "" {
+			//saveTheLeader(msg.Leader)
+			//} else {
+			saveTheLeader(msg.From)
+		}
 
 		//}
-		// for _, v := range membernodes {
-		// 	if v == msg.From {
-		// 		continue //dont send message back to node you got the accept from
-		// 	}
-		// 	go func() {
-		// 		postData(respMessage, v, "accept")
-		// 	}()
+		fmt.Printf("Deciding whether to send broadcast, %s, %v \n", msg.Messagetype, membernodes)
+		if msg.Messagetype != broadcast {
+			for _, v := range membernodes {
+				if v == msg.From {
+					continue //dont send message back to node you got the accept from
+				}
+				go func(p string) {
+					fmt.Println("Sending Broadcast to", p)
+					postData(respMessage, p, "accept")
+				}(v)
 
-		// }
+			}
+		}
 		//}
 		w.WriteHeader(200)
 		writehttpOutput(respMessage, w)
 		return
 	} else {
+		if msg.Messagetype == broadcast {
+			fmt.Printf("Received Brodcast for %+v", msg)
+			respMessage := message{
+				Transactionid: msg.Transactionid,
+				Messagetype:   "",
+				From:          portnumber,
+				Leader:        msg.Leader,
+			}
+			insertToMap(acceptedNotifications, msg.Transactionid, msg.From)
+
+			if len(acceptedNotifications[msg.Transactionid]) >= quorumVotes && msg.Transactionid == getTransaction() {
+				//Leader is elected
+				//st.LeaderCandidateTransaction = msg.Transactionid
+				//if msg.Leader != "" {
+				//saveTheLeader(msg.Leader)
+				//} else {
+				saveTheLeader(msg.Leader)
+			}
+
+			w.WriteHeader(200)
+			writehttpOutput(respMessage, w)
+			return
+
+		}
 		fmt.Println("Did not accept Accept my state:", getState(), ", myTransaction,", getTransaction(), " received ", msg)
 		// if msg.Messagetype == broadcast {
 		// 	fmt.Printf("Received braodcast message for %+v \n", msg)
@@ -436,7 +464,7 @@ func compareTransaction(trx1, trx2 int) int {
 
 	t1 := time.Unix(0, int64(trx1))
 	t2 := time.Unix(0, int64(trx2))
-	if t1.After(t2) {
+	if t1.After(t2) || t1.Equal(t2) {
 		return 1
 	}
 	return 0
