@@ -1,3 +1,5 @@
+# Leader Electiion using PAXOS
+
 Leader Election in a distributed system can become complicated as the number of nodes in a cluster increases.  
 Below is a short article on different cases that I discovered while trying to implement PAXOS to elect a leader with a different number of nodes.  
  
@@ -16,7 +18,7 @@ Once a node accepts an ACCEPT message it cannot change its value for the current
    
 The entire election process can unfold in different ways, let's go through three of those cases which would help understand how the process works  
    
-Case 1: Node 3 facing network delays  
+## Case 1: Node 3 facing network delays  
   
 ![alt text](https://github.com/Kartikkumar-Shetty/consensus-algorithms/blob/master/httpPaxos/Paxos_1.png)  
   
@@ -31,7 +33,7 @@ h.      Node1, even though it sent an ACCEPT-REQ it is not sure whether Node2 wi
 i.      Node3 now decides to start the leader election with UniqueID 101, and it sends Node1 and Node2 PREPARE requests. But both nodes have already accepted Node1 as the leader and hence they will reply back with Unique ID 100 but NodeID 1 in the PROMISE message.  
 j.      Node3 looks at the NodeID value in the PROMISE message and uses that as the NodeID in the rest of the messages, as shown in the diagram, and eventually accepts Node 1 as the leader.  
   
- Case2: Node3 becomes the leader  
+ ## Case2: Node3 becomes the leader  
    
  ![alt text](https://github.com/Kartikkumar-Shetty/consensus-algorithms/blob/master/httpPaxos/Paxos_2.png)  
    
@@ -40,7 +42,7 @@ b.      Node1 and Node2 receive a proposal from Node3 with UniqueID 101 and sinc
 c.      Hence the entire cluster has promised to make Node3 the leader.  
 d.      The rest of the process is straight forward since both Node1 and Node2 have PROMISED to Node3, Node2 proceeds to ACCEPT and eventually all three nodes accept Node3 as the leader.  
   
-Case3: Node1 gets Stuck and has to restart the process  
+## Case3: Node1 gets Stuck and has to restart the process  
   
 ![alt text](https://github.com/Kartikkumar-Shetty/consensus-algorithms/blob/master/httpPaxos/Paxos_2.png)  
   
