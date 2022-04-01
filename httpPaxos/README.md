@@ -20,7 +20,7 @@ The entire election process can unfold in different ways, let's go through three
    
 ## Case 1: Node 3 facing network delays  
   
-![alt text](https://github.com/Kartikkumar-Shetty/consensus-algorithms/blob/master/httpPaxos/Paxos_1.png)  
+![alt text](https://github.com/Kartikkumar-Shetty/consensus-algorithms/blob/master/httpPaxos/Paxos_1.1.png)  
   
 a.      Node1, Node2 broadcasts PREPARE request to all other nodes  
 b.      Node1 rejects Node2's request since Node2's ID 99 is less than Node1's ID 100.  
